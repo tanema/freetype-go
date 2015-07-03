@@ -13,8 +13,8 @@ import (
 	"image"
 	"image/draw"
 
-	"github.com/scpayson/freetype-go/freetype/raster"
-	"github.com/scpayson/freetype-go/freetype/truetype"
+	"github.com/tanema/freetype-go/freetype/raster"
+	"github.com/tanema/freetype-go/freetype/truetype"
 )
 
 // These constants determine the size of the glyph cache. The cache is keyed
