@@ -28,8 +28,14 @@ type Bounds struct {
 
 // An HMetric holds the horizontal metrics of a single glyph.
 type HMetric struct {
-	AdvanceWidth    uint16
-	LeftSideBearing int16
+	AdvanceWidth    int32
+	LeftSideBearing int32
+}
+
+// A VMetric holds the vertical metrics of a single glyph.
+type VMetric struct {
+	AdvanceHeight  int32
+	TopSideBearing int32
 }
 
 // A FormatError reports that the input is not a valid TrueType font.
@@ -105,8 +111,8 @@ type cm struct {
 type Font struct {
 	// Tables sliced from the TTF data. The different tables are documented
 	// at http://developer.apple.com/fonts/TTRefMan/RM06/Chap6.html
-	cmap, glyf, head, hhea, hmtx, kern, loca, maxp []byte
-	cmapIndexes                                    []byte
+	cmap, glyf, head, hhea, hmtx, vmtx, os2, kern, loca, maxp []byte
+	cmapIndexes                                               []byte
 
 	// Cached values derived from the raw ttf data.
 	cm                      []cm
@@ -314,24 +320,59 @@ func (f *Font) Index(x rune) Index {
 	return Index(0)
 }
 
+// u16 returns the big-endian uint16 at b[i:].
+func u16(b []byte, i int) uint16 {
+	return uint16(b[i])<<8 | uint16(b[i+1])
+}
+
 // HMetric returns the horizontal metrics for the glyph with the given index.
 func (f *Font) HMetric(i Index) HMetric {
 	j := int(i)
-	if j >= f.nGlyph {
+	if j < 0 || f.nGlyph <= j {
 		return HMetric{}
 	}
 	if j >= f.nHMetric {
-		var hm HMetric
 		p := 4 * (f.nHMetric - 1)
-		d := data(f.hmtx[p:])
-		hm.AdvanceWidth = d.u16()
-		p += 2*(j-f.nHMetric) + 4
-		d = data(f.hmtx[p:])
-		hm.LeftSideBearing = int16(d.u16())
-		return hm
+		return HMetric{
+			AdvanceWidth:    int32(u16(f.hmtx, p)),
+			LeftSideBearing: int32(int16(u16(f.hmtx, p+2*(j-f.nHMetric)+4))),
+		}
 	}
-	d := data(f.hmtx[4*j:])
-	return HMetric{d.u16(), int16(d.u16())}
+	return HMetric{
+		AdvanceWidth:    int32(u16(f.hmtx, 4*j)),
+		LeftSideBearing: int32(int16(u16(f.hmtx, 4*j+2))),
+	}
+}
+
+// VMetric returns the vertical metrics for the glyph with the given index.
+func (f *Font) VMetric(i Index) VMetric {
+	j := int(i)
+	if j < 0 || f.nGlyph <= j {
+		return VMetric{}
+	}
+	if 4*j+4 <= len(f.vmtx) {
+		return VMetric{
+			AdvanceHeight:  int32(u16(f.vmtx, 4*j)),
+			TopSideBearing: int32(int16(u16(f.vmtx, 4*j+2))),
+		}
+	}
+	// The OS/2 table has grown over time.
+	// https://developer.apple.com/fonts/TTRefMan/RM06/Chap6OS2.html
+	// says that it was originally 68 bytes. Optional fields, including
+	// the ascender and descender, are described at
+	// http://www.microsoft.com/typography/otspec/os2.htm
+	if len(f.os2) >= 72 {
+		sTypoAscender := int32(int16(u16(f.os2, 68)))
+		sTypoDescender := int32(int16(u16(f.os2, 70)))
+		return VMetric{
+			AdvanceHeight:  sTypoAscender - sTypoDescender,
+			TopSideBearing: sTypoAscender,
+		}
+	}
+	return VMetric{
+		AdvanceHeight:  int32(f.unitsPerEm),
+		TopSideBearing: 0,
+	}
 }
 
 // Kerning returns the kerning for the given glyph pair.
@@ -393,6 +434,10 @@ func Parse(ttf []byte) (font *Font, err error) {
 			f.loca, err = readTable(ttf, ttf[x+8:x+16])
 		case "maxp":
 			f.maxp, err = readTable(ttf, ttf[x+8:x+16])
+		case "OS/2":
+			f.os2, err = readTable(ttf, ttf[x+8:x+16])
+		case "vmtx":
+			f.vmtx, err = readTable(ttf, ttf[x+8:x+16])
 		}
 		if err != nil {
 			return
